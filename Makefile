@@ -7,9 +7,15 @@ build: clean
 
 run:
 	cmake --build build/
-	./build/frs
+	./build/frs $(file)
 
 compile:
 	cmake --build build/
-	./build/frs ./main.frs
+	./build/frs $(file)
+
+docker-build:
+	docker build -t frs ./
+
+docker-run: docker-build
+	docker run -it frs
 
