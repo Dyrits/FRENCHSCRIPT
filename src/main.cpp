@@ -6,6 +6,8 @@
 #include <unordered_map>
 #include <sys/utsname.h>
 
+#include "./tokenization.hpp"
+
 // Types de jetons constituant le langage.
 enum class TokenType {
     sortir,
