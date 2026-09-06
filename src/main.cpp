@@ -4,9 +4,11 @@
 #include <optional>
 #include <vector>
 #include <unordered_map>
+#include <sys/utsname.h>
 
 // Types de jetons constituant le langage.
 enum class TokenType {
+    sortir,
     retourner,
     entier,
     si,
@@ -24,6 +26,20 @@ struct Token {
     std::optional<std::string> value;
 };
 
+enum class Target {
+    Arm64MacOS,
+    X86_64Linux,
+};
+
+Target detect_target() {
+    struct utsname info;
+    uname(&info);
+    std::string machine(info.machine);
+    std::string sysname(info.sysname);
+    if (machine == "arm64" && sysname == "Darwin") return Target::Arm64MacOS;
+    return Target::X86_64Linux;
+}
+
 /**
  * Transforme une chaîne de caractères en une liste de jetons.
  * @param content Chaîne de caractères à transformer en jetons.
@@ -40,7 +56,8 @@ std::vector<Token> tokenize(const std::string& content) {
         {"alors", TokenType::alors},
         {"fonction", TokenType::fonction},
         // {";", TokenType::point_virgule},
-        {"retourner", TokenType::retourner}
+        {"retourner", TokenType::retourner},
+        {"sortir", TokenType::sortir}
     };
 
     for (int index = 0; index < content.length(); index++) {
@@ -101,16 +118,36 @@ std::vector<Token> tokenize(const std::string& content) {
     return tokens;
 }
 
-std::string tokens_to_asm(const std::vector<Token>& tokens) {
-    std::string output = "global _start\nglobal _main\n_main: jmp _start\n_start:\n";
+std::string tokens_to_asm(const std::vector<Token>& tokens, Target target) {
+    std::string output;
+    std::string exit_code_reg;
+    switch (target) {
+        case Target::Arm64MacOS:
+            output = ".global _main\n_main:\n";
+            exit_code_reg = "x0";
+            break;
+        case Target::X86_64Linux:
+            output = "global _start\n_start:\n";
+            exit_code_reg = "rdi";
+            break;
+    }
     for (int index = 0; index < tokens.size(); index ++) {
         const Token& token = tokens.at(index);
-        if (token.type == TokenType::retourner) {
+        if (token.type == TokenType::sortir) {
             if (index + 1 < tokens.size() && tokens.at(index + 1).type == TokenType::entier) {
                 if (index + 2 < tokens.size() && tokens.at(index + 2).type == TokenType::point_virgule) {
-                    output += "    mov rax, 60\n";
-                    output += "    mov rdi, " + tokens.at(index + 1).value.value() + "\n";
-                    output += "    syscall\n";
+                    switch (target) {
+                        case Target::Arm64MacOS:
+                            output += "    mov " + exit_code_reg + ", #" + tokens.at(index + 1).value.value() + "\n";
+                            output += "    mov x16, #1\n";
+                            output += "    svc #0x80\n";
+                            break;
+                        case Target::X86_64Linux:
+                            output += "    mov rax, 60\n";
+                            output += "    mov " + exit_code_reg + ", " + tokens.at(index + 1).value.value() + "\n";
+                            output += "    syscall\n";
+                            break;
+                    }
                     index += 2;
                 } else {
                     std::cerr << "Erreur: point-virgule manquant après l'entier" << std::endl;
@@ -146,14 +183,23 @@ int main(int argc, char *argv[])
 
     // Tokenize the content.
     std::vector<Token> tokens = tokenize(content);
+    Target target = detect_target();
 
     {
         std::fstream file("output.asm", std::ios::out);
-        file << tokens_to_asm(tokens);
+        file << tokens_to_asm(tokens, target);
     }
 
-    system("nasm -f elf64 output.asm");
-    system("ld -o output output.o");
+    switch (target) {
+        case Target::Arm64MacOS:
+            system("as -o output.o output.asm");
+            system("ld -arch arm64 -o output output.o -lSystem -syslibroot $(xcrun --show-sdk-path)");
+            break;
+        case Target::X86_64Linux:
+            system("nasm -f elf64 output.asm");
+            system("ld -o output output.o");
+            break;
+    }
 
     return EXIT_SUCCESS;
 }
